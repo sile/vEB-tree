@@ -1,159 +1,140 @@
 (in-package :veb-tree)
 ;; see: http://en.wikipedia.org/wiki/Van_Emde_Boas_tree
 
-(defstruct veb-node 
-  (min most-positive-fixnum)
-  (max most-negative-fixnum)
-  aux
+(defstruct node
+  bit-length
   children
-  element-count-limit)
+  min
+  max
+  aux)
 
-(defun make (limit)
-  (make-veb-node :element-count-limit limit))
+(defun own-bit-length (node)
+  (ceiling (node-bit-length node) 2))
+
+(defun descendants-bit-length (node)
+  (floor (node-bit-length node) 2))
+
+(defun children-count (node)
+  (expt 2 (own-bit-length node)))
+
+(defun child-max-element-count (node)
+  (expt 2 (descendants-bit-length node)))
+
+(defun make (max-element-count)
+  (let ((bit-len (integer-length max-element-count)))
+    (make-node :bit-length bit-len
+               :min most-positive-fixnum
+               :max -1)))
 
 (defun empty-p (node)
   (with-slots (min max) node
     (> min max)))
 
-(defun min=max-p (node)
-    (with-slots (min max) node
-      (= min max)))
+(defun has-children-p (node)
+  (not (null (node-children node))))
+
+(defun ensure-node-children (node)
+  (with-slots (children bit-length) node
+    (when (null children)
+      (setf children
+            (loop WITH child-max-elem = (child-max-element-count node)
+                  REPEAT (children-count node)
+                  COLLECT (make child-max-elem) INTO list
+                  FINALLY (return (coerce list 'vector)))))
+    children))
+
+(defun ensure-node-aux (node)
+  (with-slots (aux) node
+    (when (null aux)
+      (setf aux (make (children-count node))))
+    aux))
+
+(defun get-child (elem node &key ensure)
+  (when ensure
+    (ensure-node-children node))
+
+  (let ((index (ldb (byte (own-bit-length node)
+                          (descendants-bit-length node))
+                    elem)))
+    (values (aref (node-children node) index) 
+            index)))
+
+(defun push-impl (x node)
+  (with-slots (min max) node
+    (cond ((empty-p node)
+           (setf min x 
+                 max x))
+          ((= min max)
+           (if (< x min)
+               (setf min x)
+             (setf max x)))
+          (t 
+           (when (< x min) (rotatef x min))
+           (when (> x max) (rotatef x max))
+           
+           (multiple-value-bind (child index-of-child)
+                                (get-child x node :ensure t)
+             (when (empty-p child)
+               (push-impl index-of-child (ensure-node-aux node)))
+             (push-impl x child))))))
 
 (defun push (elem tree)
-  (labels ((ensure-children (node)
-             (with-slots (children element-count-limit) node
-               (when (null children)
-                 (setf children
-                       (loop REPEAT #1=(ceiling (sqrt element-count-limit))
-                             COLLECT (make #1#) INTO list
-                             FINALLY (return (coerce list 'vector)))))))
-           (ensure-aux (node)
-             (with-slots (aux element-count-limit) node
-               (when (null aux)
-                 (setf aux (make #1#)))))
-           (recur (x node)
-             (with-slots (min max children) node
-               (when (> min max)
-                 (setf min x max x)
-                 (return-from recur))
-
-               (when (= min max)
-                 (if (< x min)
-                     (setf min x)
-                   (setf max x))
-                 (return-from recur)) 
-
-               (when (< x min)
-                 (rotatef x min))
-               (when (> x max)
-                 (rotatef x max))
-               
-               (ensure-children node)
-               (let* ((child-count (length children))
-                      (i (floor x child-count))
-                      (child (aref children i)))
-                 (recur (mod x child-count) child)
-                 (when (min=max-p child)
-                   (ensure-aux node)
-                   (push i (veb-node-aux node)))))))
-    (recur elem tree))
+  (push-impl elem tree)
   tree)
 
+(defun find-impl (x node)
+  (with-slots (min max) node
+    (cond ((not (<= min x max)) nil)
+          ((= x min) t)
+          ((= x max) t)
+          ((not (has-children-p node)) nil)
+          (t
+           (find-impl x (get-child x node))))))
+           
 (defun find (elem tree)
-  (labels ((recur (x node)
-             (with-slots (min max children) node
-               (when (not (<= min x max))
-                 (return-from recur nil))
+  (find-impl elem tree))
 
-               (when (= x min)
-                 (return-from recur t))
+(defun next-impl (x node)
+  (with-slots (min max children aux) node
+    (cond ((<= x min) min)
+          ((>  x max) nil)
+          ((not (has-children-p node)) max)
+          (t
+           (multiple-value-bind (child index-of-child) (get-child x node)
+             (if (<= x (node-max child))
+                 (next-impl x child)
+               (let ((nearest-valid-index (next-impl (1+ index-of-child) aux)))
+                 (if (null nearest-valid-index)
+                     max
+                   (node-min (aref children nearest-valid-index))))))))))
+           
+(defun next (elem tree)
+  (next-impl elem tree))
 
-               (when (= x max)
-                 (return-from recur t))
-               
-               (when children
-                 (let* ((child-count (length children))
-                        (i (floor x child-count))
-                        (child (aref children i)))
-                   (recur (mod x child-count) child))))))
-    (recur elem tree)))
-
-(defun find-next (elem tree)
-  (labels ((recur (x node)
-             (print (list :in x))
-             (with-slots (min max children element-count-limit) node
-               (print (list :range min max))
-               (when (<= x min)
-                 (return-from recur min))
-
-               (when (> x max)
-                 (return-from recur element-count-limit))
-
-               (when (null children)
-                 (return-from recur max))
-               (print (list (ceiling (sqrt element-count-limit))
-                            (length children)))
-
-               (let* ((child-count (ceiling (sqrt element-count-limit)))
-                      (i (floor x child-count))
-                      (lo-bits (mod x child-count))
-                      (hi-bits (- x lo-bits))
-                      (child (aref children i)))
-                 (if (<= lo-bits (veb-node-max child))
-                     (+ hi-bits (* child-count i) (recur lo-bits child)) ; =?= (veb-node-min child)
-                   ;; XXX: if aux == nil, return max-value
-                   (progn 
-                     (print (list :aux (veb-node-aux node)))
-                     (let ((ret (recur (1+ i) (veb-node-aux node))))
-                       (print (list :ret ret
-                                    :x x
-                                    :i i
-                                    :lo lo-bits
-                                    :hi hi-bits
-                                    :ch (and (< ret (length children)) (aref children ret))))
-                       (if (< ret (length children))
-                           (+ hi-bits 
-                              (* child-count (1+ i))
-                              (veb-node-min
-                               (aref children ret)))
-                         max))))))))
-    (recur elem tree)))
+(defun remove-impl (x node)
+  (with-slots (min max aux children) node
+    (cond ((= x min max)
+           (setf min most-positive-fixnum
+                 max -1))
+          ((not (has-children-p node))
+           (cond ((= x min) (setf min max))
+                 ((= x max) (setf max min))
+                 (t         nil)))
+          (t
+           (when (= x min)
+             (setf x (node-min (aref children (node-min aux)))
+                   min x))
+           (when (= x max)
+             (setf x (node-max (aref children (node-max aux)))
+                   max x))
+           
+           (multiple-value-bind (child index-of-child) (get-child x node)
+             (remove-impl x child)
+             (when (empty-p child)
+               (remove-impl index-of-child aux)
+               (when (empty-p aux)
+                 (setf children nil
+                       aux nil))))))))
 
 (defun remove (elem tree)
-  (labels
-   ((recur (x node)
-      (with-slots (min max aux children element-count-limit) node
-        (when (= min x max)
-          (setf min most-negative-fixnum
-                max most-positive-fixnum)
-          (return-from recur t))
-        
-        (when (= x min)
-          (when (null aux)
-            (setf min max) 
-            (return-from recur t))
-          (setf x (veb-node-min (aref children (veb-node-min aux)))
-                min x))
-        
-        (when (= x max)
-          (when (null aux)
-            (setf max min)
-            (return-from recur t))
-          (setf x (veb-node-max (aref children (veb-node-max aux)))
-                max x))
-        
-        (when (null aux)
-          (return-from recur nil))
-
-        (let* ((child-count (ceiling (sqrt element-count-limit)))
-               (i (floor x child-count))
-               (child (aref children i)))
-          (recur (mod x child-count) child)
-          (when (null child) ;; XXX: empty
-            (remove i aux))))))
-   (remove elem tree))
-  tree)
-
-#|
-(defparameter *n* (veb-tree:push 15 (veb-tree:push 90 (veb-tree:push 3 (veb-tree:push 2 (veb-tree:push 10 (veb-tree:make 100)))))))
-|#
+  (remove-impl elem tree))
