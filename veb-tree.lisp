@@ -8,28 +8,6 @@
   children
   element-count-limit)
 
-(defstruct veb-tree
-  root
-  key-limit
-  
-  )
-
-(defun find-next (tree x)
-  (with-slots (root key-limit) tree
-    (labels ((recur (node x)
-               (with-slots (min max aux children) node
-                 (cond ((<= x min) min)
-                       ((> x max) key-limit)
-                       (t
-                        (let* ((i (floor (/ x (sqrt key-limit))))
-                               (lo (mod x (sqrt key-limit)))
-                               (hi (- x lo)))
-                          (if (<= lo (veb-node-max (aref children i)))
-                              (+ hi (recur (aref children i) lo))
-                            (+ hi (veb-node-min
-                                   (aref children (recur aux (1+ i))))))))))))
-      (recur root x))))
-
 (defun make (limit)
   (make-veb-node :element-count-limit limit))
 
@@ -80,3 +58,67 @@
                    (push i (veb-node-aux node)))))))
     (recur elem tree))
   tree)
+
+(defun find (elem tree)
+  (labels ((recur (x node)
+             (with-slots (min max children) node
+               (when (not (<= min x max))
+                 (return-from recur nil))
+
+               (when (= x min)
+                 (return-from recur t))
+
+               (when (= x max)
+                 (return-from recur t))
+               
+               (when children
+                 (let* ((child-count (length children))
+                        (i (floor x child-count))
+                        (child (aref children i)))
+                   (recur (mod x child-count) child))))))
+    (recur elem tree)))
+
+(defun find-next (elem tree)
+  (labels ((recur (x node)
+             (print (list :in x))
+             (with-slots (min max children element-count-limit) node
+               (print (list :range min max))
+               (when (<= x min)
+                 (return-from recur min))
+
+               (when (> x max)
+                 (return-from recur (1- element-count-limit)))
+
+               (when (null children)
+                 (return-from recur max))
+               (print (list (ceiling (sqrt element-count-limit))
+                            (length children)))
+
+               (let* ((child-count (ceiling (sqrt element-count-limit))) ;;(length children))
+                      (i (floor x child-count))
+                      (lo-bits (mod x child-count))
+                      (hi-bits (- x lo-bits))
+                      (child (aref children i)))
+                 (if (<= lo-bits (veb-node-max child))
+                     (+ hi-bits (* child-count i) (recur lo-bits child)) ; =?= (veb-node-min child)
+                   ;; XXX: if aux == nil, return max-value
+                   (progn 
+                     (print (list :aux (veb-node-aux node)))
+                     (let ((ret (recur (1+ i) (veb-node-aux node))))
+                       (print (list :ret ret
+                                    :x x
+                                    :i i
+                                    :lo lo-bits
+                                    :hi hi-bits
+                                    :ch (aref children ret)))
+                       (if (not (empty-p (aref children ret)))
+                           (+ hi-bits 
+                              (* child-count (1+ i))
+                              (veb-node-min
+                               (aref children ret)))
+                         max))))))))
+    (recur elem tree)))
+
+#|
+(defparameter *n* (veb-tree:push 15 (veb-tree:push 90 (veb-tree:push 3 (veb-tree:push 2 (veb-tree:push 10 (veb-tree:make 100)))))))
+|#
