@@ -87,7 +87,7 @@
                  (return-from recur min))
 
                (when (> x max)
-                 (return-from recur (1- element-count-limit)))
+                 (return-from recur element-count-limit))
 
                (when (null children)
                  (return-from recur max))
@@ -110,8 +110,8 @@
                                     :i i
                                     :lo lo-bits
                                     :hi hi-bits
-                                    :ch (aref children ret)))
-                       (if (not (empty-p (aref children ret)))
+                                    :ch (and (< ret (length children)) (aref children ret))))
+                       (if (< ret (length children))
                            (+ hi-bits 
                               (* child-count (1+ i))
                               (veb-node-min
