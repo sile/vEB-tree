@@ -94,7 +94,7 @@
                (print (list (ceiling (sqrt element-count-limit))
                             (length children)))
 
-               (let* ((child-count (ceiling (sqrt element-count-limit))) ;;(length children))
+               (let* ((child-count (ceiling (sqrt element-count-limit)))
                       (i (floor x child-count))
                       (lo-bits (mod x child-count))
                       (hi-bits (- x lo-bits))
@@ -118,6 +118,41 @@
                                (aref children ret)))
                          max))))))))
     (recur elem tree)))
+
+(defun remove (elem tree)
+  (labels
+   ((recur (x node)
+      (with-slots (min max aux children element-count-limit) node
+        (when (= min x max)
+          (setf min most-negative-fixnum
+                max most-positive-fixnum)
+          (return-from recur t))
+        
+        (when (= x min)
+          (when (null aux)
+            (setf min max) 
+            (return-from recur t))
+          (setf x (veb-node-min (aref children (veb-node-min aux)))
+                min x))
+        
+        (when (= x max)
+          (when (null aux)
+            (setf max min)
+            (return-from recur t))
+          (setf x (veb-node-max (aref children (veb-node-max aux)))
+                max x))
+        
+        (when (null aux)
+          (return-from recur nil))
+
+        (let* ((child-count (ceiling (sqrt element-count-limit)))
+               (i (floor x child-count))
+               (child (aref children i)))
+          (recur (mod x child-count) child)
+          (when (null child) ;; XXX: empty
+            (remove i aux))))))
+   (remove elem tree))
+  tree)
 
 #|
 (defparameter *n* (veb-tree:push 15 (veb-tree:push 90 (veb-tree:push 3 (veb-tree:push 2 (veb-tree:push 10 (veb-tree:make 100)))))))
