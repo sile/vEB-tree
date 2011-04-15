@@ -1,5 +1,4 @@
 (in-package :veb-tree)
-;; see: http://en.wikipedia.org/wiki/Van_Emde_Boas_tree
 
 (defstruct node
   bit-length
@@ -7,6 +6,10 @@
   min
   max
   aux)
+
+(defstruct tree
+  root
+  size)
 
 (defun own-bit-length (node)
   (ceiling (node-bit-length node) 2))
@@ -20,13 +23,22 @@
 (defun child-max-element-count (node)
   (expt 2 (descendants-bit-length node)))
 
-(defun make (max-element-count)
+(defun %make-node (max-element-count)
   (let ((bit-len (integer-length max-element-count)))
     (make-node :bit-length bit-len
                :min most-positive-fixnum
                :max -1)))
 
-(defun empty-p (node)
+(defun make (capacity)
+  (make-tree :root (%make-node capacity) :size 0))
+
+(defun size (tree)
+  (tree-size tree))
+
+(defun empty-p (tree)
+  (node-empty-p (tree-root tree)))
+
+(defun node-empty-p (node)
   (with-slots (min max) node
     (> min max)))
 
@@ -39,14 +51,14 @@
       (setf children
             (loop WITH child-max-elem = (child-max-element-count node)
                   REPEAT (children-count node)
-                  COLLECT (make child-max-elem) INTO list
+                  COLLECT (%make-node child-max-elem) INTO list
                   FINALLY (return (coerce list 'vector)))))
     children))
 
 (defun ensure-node-aux (node)
   (with-slots (aux) node
     (when (null aux)
-      (setf aux (make (children-count node))))
+      (setf aux (%make-node (children-count node))))
     aux))
 
 (defun get-child (elem node &key ensure)
@@ -61,9 +73,11 @@
 
 (defun push-impl (x node)
   (with-slots (min max) node
-    (cond ((empty-p node)
+    (cond ((node-empty-p node)
            (setf min x 
                  max x))
+          ((or (= x min) (= x max))
+           nil)
           ((= min max)
            (if (< x min)
                (setf min x)
@@ -74,12 +88,13 @@
            
            (multiple-value-bind (child index-of-child)
                                 (get-child x node :ensure t)
-             (when (empty-p child)
+             (when (node-empty-p child)
                (push-impl index-of-child (ensure-node-aux node)))
              (push-impl x child))))))
 
 (defun push (elem tree)
-  (push-impl elem tree)
+  (when (push-impl elem (tree-root tree))
+    (incf (tree-size tree)))
   tree)
 
 (defun find-impl (x node)
@@ -92,7 +107,7 @@
            (find-impl x (get-child x node))))))
            
 (defun find (elem tree)
-  (find-impl elem tree))
+  (find-impl elem (tree-root tree)))
 
 (defun next-impl (x node)
   (with-slots (min max children aux) node
@@ -109,7 +124,7 @@
                    (node-min (aref children nearest-valid-index))))))))))
            
 (defun next (elem tree)
-  (next-impl elem tree))
+  (next-impl elem (tree-root tree)))
 
 (defun remove-impl (x node)
   (with-slots (min max aux children) node
@@ -119,22 +134,54 @@
           ((not (has-children-p node))
            (cond ((= x min) (setf min max))
                  ((= x max) (setf max min))
-                 (t         nil)))
+                 (t nil)))  ; not exists
           (t
            (when (= x min)
-             (setf x (node-min (aref children (node-min aux)))
-                   min x))
+             (setf min (setf x (node-min (aref children (node-min aux))))))
            (when (= x max)
-             (setf x (node-max (aref children (node-max aux)))
-                   max x))
+             (setf max (setf x (node-max (aref children (node-max aux))))))
            
            (multiple-value-bind (child index-of-child) (get-child x node)
-             (remove-impl x child)
-             (when (empty-p child)
-               (remove-impl index-of-child aux)
-               (when (empty-p aux)
-                 (setf children nil
-                       aux nil))))))))
+             (prog1 (remove-impl x child)
+               (when (node-empty-p child)
+                 (remove-impl index-of-child aux)
+                 (when (node-empty-p aux)
+                   (setf children nil
+                         aux nil)))))))))
 
 (defun remove (elem tree)
-  (remove-impl elem tree))
+  (when (remove-impl elem (tree-root tree))
+    (decf (tree-size tree)))
+  tree)
+
+(defun head (tree)
+  (with-slots (root) tree
+    (when (/= (node-min root) most-positive-fixnum)
+      (node-min root))))
+
+(defun pop (tree)
+  (prog1 (head tree)
+    (unless (empty-p tree)
+      (remove (next 0 tree) tree)
+      (decf (tree-size tree)))))
+
+(defmacro each ((var tree &optional result-form) &body body)
+  (let ((cur (gensym))
+        (tree-val (gensym)))
+    `(let ((,tree-val ,tree))
+       (do* ((,cur (next 0 ,tree-val) (next (1+ ,cur) ,tree-val))
+             (,var ,cur ,cur))
+            ((null ,cur) ,result-form)
+            ,@body))))
+
+(defun to-list (tree &aux acc)
+  (each (x tree (nreverse acc))
+    (common-lisp:push x acc)))
+
+(defun from-list (capacity list)
+  (loop WITH tree = (make capacity)
+        FOR x IN list
+    DO
+    (push x tree)
+    FINALLY
+    (return tree)))

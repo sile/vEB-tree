@@ -1,16 +1,20 @@
 (defpackage veb-tree
   (:use :common-lisp)
-  (:shadow :common-lisp push pop remove find)
-  (:export veb-tree
-           veb-tree-p
+  (:shadow :common-lisp push pop remove find copy-tree)
+  (:export tree
+           tree-p
            make
            push
            pop
            head
            remove
            find
+           next
            empty-p
            size
            each
-           from-list))
+           from-list
+           to-list
+           
+           node))
 (in-package :veb-tree)
